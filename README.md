@@ -13,7 +13,7 @@ Use this to backup all the images from your Blogger blog.
 6. The program will download all images, printing status to the console
 7. At the end, a file (blogbackuplog.txt) is saved to the path, consult this to see if any downloads timed out: if so you may want to run the program again
 
-*If you're not comfortable with using the command prompt, you can create a 'batch' file next to BlogBackup.exe, and paste into it the command shown above in step 5 (with the approprite paths)
+*If you're not comfortable with using the command prompt, you can create a 'batch' file next to BlogBackup.exe, and paste into it the command shown above in step 5 (with the appropriate paths)
 
 ##Prerequisites
 You need to have at least .Net framework 2.0 (http://www.microsoft.com/download/en/details.aspx?id=19) installed.
@@ -26,12 +26,15 @@ Though I wrote this specifically for downloading from Blogger, it can be used fo
 Because I am philosophically opposed to the idea of people trusting a program that they just downloaded off the internet with their blogger login credentials.
 
 ##Future work
-The next two steps (I'm not sure in which order) are to enable downloading embedded videos (not easy), and to recreate the html on disk.
+The next two steps are to to recreate the html on disk, (and get video playback working).
 
 ##License terms
 Use this software - compiled or source code - any which way you want, but don't blame me if it does something you don't like.
 
 ##Changelog
 
-###02 Marche 2012
+###08 June 2012
+Add download of embedded Blogger videos (in blogger-specific format) - not YouTube videos.
+
+###02 March 2012
 Initial version

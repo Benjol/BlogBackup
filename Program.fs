@@ -5,9 +5,9 @@ open System.Text.RegularExpressions
 open Microsoft.FSharp.Control.WebExtensions
 open BlogBackup
 
-///Possible states of an image: before, during or after download
-type ImageState =
-    | Pending of string * string                //Image waiting to be downloaded (url, local path)
+///Possible states of an asset: before, during or after download
+type AssetState =
+    | Pending of string * string                //Asset waiting to be downloaded (url, local path)
     | Skipped of string                         //Already on local disk (url)
     | Blacklisted of string                     //Explicitly excluded via last parameter of 'backup' function (url)
     | SuccessfulDownload of string * byte[]     //Downloaded, waiting to be saved to disk (url, imageData)
@@ -28,12 +28,12 @@ type System.Net.WebRequest with
                   raise (System.Net.WebException "The operation has timed out") }
     Async.TryCancelled (impl, fun _ -> req.Abort ())
 
-///download an image asynchronously, return an ImageState
+///download an asset asynchronously, return an AssetState
 ///Inspired/copied from http://fdatamining.blogspot.com/2010/07/f-async-workflow-application-flickr.html
-let getImage (imageUrl:string) =
+let getAsset (assetUrl:string) =
     async {
         try
-            let req = WebRequest.Create(imageUrl) :?> HttpWebRequest
+            let req = WebRequest.Create(assetUrl) :?> HttpWebRequest
             req.UserAgent <- "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; .NET CLR 1.1.4322)";
             req.Method <- "GET";
             req.ServicePoint.ConnectionLimit <- 1000;
@@ -50,20 +50,31 @@ let getImage (imageUrl:string) =
             while !bytesRead > 0 do
                 bytesRead := stream.Read(buffer, 0, buffer.Length)
                 ms.Write(buffer, 0, !bytesRead)
-            return SuccessfulDownload(imageUrl, ms.ToArray())
+            return SuccessfulDownload(assetUrl, ms.ToArray())
  
         with
-            ex -> return FailedDownload(imageUrl, ex.Message)
+            ex -> return FailedDownload(assetUrl, ex.Message)
     }
 
 ///Given a path to a text file, return a seq containing anything that looks like an image url
 let getImageURLs filePath =
     let matches pat str = Regex.Matches(str, pat, RegexOptions.IgnoreCase) |> Seq.cast<Match>
     let value (m:Match) = m.Value
-    filePath |> File.ReadAllText |> matches @"http://[^\s'""]+?\.(jpg|gif|png)" |> Seq.map value
+    filePath |> File.ReadAllText |> matches @"http://[^\s'""]+?\.(jpg|gif|png)" |> Seq.map value |> Seq.distinct
+
+///Home-spun UrlDecode for video urls
+let urlDecode (url:string) = 
+    url.Replace("%3D","=").Replace("%26", "&").Replace("%25","%")
+
+///Given a path to a text file, return a seq containing anything that looks like a video url
+let getVideoURLs filePath = 
+    let matches pat str = Regex.Matches(str, pat, RegexOptions.IgnoreCase) |> Seq.cast<Match>
+    let value (m:Match) = m.Value
+    let topntail (str:string) = str.Substring(7, str.Length - 8) // "flvurl=".Length = 7, final & = 1
+    filePath |> File.ReadAllText |> matches @"flvurl=.*?&" |> Seq.map value |> Seq.distinct |> Seq.map urlDecode |> Seq.map topntail
 
 ///Save byte[] content to given path on disk (asynchronously)
-let asyncSaveImageToDisk path content =
+let asyncSaveAssetToDisk path content =
     //make sure directory path exists
     Directory.CreateDirectory(Path.GetDirectoryName(path)) |> ignore
     async {
@@ -71,15 +82,14 @@ let asyncSaveImageToDisk path content =
         do! s.AsyncWrite(content)
         }
 
-///This is the function that does the 'real' work. Given a list of imageUrls, downloads them to disk path
-/// (using the urltopath function to determine disk path), unless they correponds to blackpattern, or
-/// if they are already present on disk. Runs request in parallel, returns a list of ImageStates
-let getImages urltopath blackpattern imageUrls =
+///This is the function that does the 'real' work. Given a list of assetUrls, downloads them to disk path
+/// (using the urltopath function to determine disk path), unless they correpond to blackpattern, or
+/// if they are already present on disk. Runs request in parallel, returns a list of AssetStates
+let getAssets urltopath blackpattern assetUrls =
     let blackreg = Regex(blackpattern, RegexOptions.IgnoreCase)
-    imageUrls
-        |> Seq.distinct                                                                              //only download each image once!
+    assetUrls
         |> Seq.map (fun url -> if blackreg.IsMatch(url) then Blacklisted(url) else Pending(url,""))  //exclude blacklisted urls
-        |> Seq.map (function | Pending(url, _) -> Pending(url, urltopath url) | b -> b)              //calculate disk path for pending images
+        |> Seq.map (function | Pending(url, _) -> Pending(url, urltopath url) | b -> b)              //calculate disk path for pending assets
         |> Seq.map (function                                                                         //change Pending to Skipped if already on disk
                     | Pending(url, path) as p -> if File.Exists(path) then Skipped(url) else p 
                     | b -> b)
@@ -87,12 +97,12 @@ let getImages urltopath blackpattern imageUrls =
                 match state with
                 | Pending(url, path) -> 
                             printfn "%d. Starting %A" i url
-                            let! result = getImage url
+                            let! result = getAsset url
                             match result with
                             | SuccessfulDownload(url, content) ->
                                 printfn "%d. Done reading %A" i url
                                 try
-                                    do! asyncSaveImageToDisk path content 
+                                    do! asyncSaveAssetToDisk path content 
                                     printfn "%d. Done writing to %A" i path
                                     return Done(url, path)
                                 with ex ->
@@ -101,14 +111,22 @@ let getImages urltopath blackpattern imageUrls =
                             | other -> printfn "%d. Download failed" i; return other
                 | other -> return other
                     })
-        |> ThrottleAgent<ImageState>.RunParallel 10   //Limit to 10 parallel downloads at a time
+        |> ThrottleAgent<AssetState>.RunParallel 10   //Limit to 10 parallel downloads at a time
 
-///Extracts all image links from xml file, saves to rootPath, except for those corresponding to blackpattern.
-/// Returns a list of ImageStates representing any failed downloads
+///Extracts all media links from xml file, saves to rootPath, except for those corresponding to blackpattern.
+/// Returns a list of AssetStates representing any failed downloads
 let backup xmlPath rootPath blackpattern =
     let sw = Stopwatch.StartNew()
+
     let urltopath (url:string) = Path.Combine(rootPath, url.Replace("http://", ""))
-    let results = xmlPath |> getImageURLs |> getImages urltopath blackpattern
+    let imageresults = xmlPath |> getImageURLs |> getAssets urltopath blackpattern
+
+    let videourltopath (url:string) = 
+        let (eq,nd) = (url.IndexOf('=') + 1, url.IndexOf('&'))
+        Path.Combine(Path.Combine(rootPath, "VIDEO"), url.Substring(eq, nd - eq) + ".flv")
+    let videoresults = xmlPath |> getVideoURLs |> getAssets videourltopath blackpattern
+
+    let results = Array.append imageresults videoresults
     printfn "Done"
     //Ugly code to fold results into 'statistics' for printing to console, each element of the tuple represents an ImageState
     let (t, s, b, fd, fs, d) = 
@@ -123,8 +141,7 @@ let backup xmlPath rootPath blackpattern =
     printfn "%d total, %d skipped, %d blacklisted, %d failed download, %d failed save, %d completed successfully, in %ums" t s b fd fs d sw.ElapsedMilliseconds
     results |> Array.filter (function | Blacklisted(_) | FailedDownload(_) | FailedSave(_) -> true | _ -> false)
 
-//Todo: download videos too
-//      recreate html files locally on disk
+//Todo: recreate html files locally on disk
 [<EntryPoint>]
 let main args =
     match args with
